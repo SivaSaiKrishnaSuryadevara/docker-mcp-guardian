@@ -685,6 +685,54 @@ My first version of this script taught me something about the transport. I piped
 
 Real MCP clients keep stdin open for the life of the session, so this isn't a server bug. But if you test with a shell heredoc (`docker run -i ... << EOF`), you'll get the same truncated output and might conclude the server is broken. Keep stdin open until you've read every response, as the script above does, or add a `sleep` at the end of the input. Also send `initialize` first: MCP servers reject `tools/call` before the handshake.
 
+### Verified Stdio Execution Trace
+
+Running a direct JSON-RPC call over the stdio interface against a protected container confirms the fail-closed defense. The request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "method": "tools/call",
+  "params": {
+    "name": "safe_restart_container",
+    "arguments": {"container": "prod-payments"}
+  }
+}
+```
+
+The raw response, captured from the server:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"forbidden\",\n    \"message\": \"Server is in read-only mode (set GUARDIAN_ALLOW_WRITE=true to enable restarts).\"\n  }\n}"
+      }
+    ],
+    "structuredContent": {
+      "ok": false,
+      "error": {
+        "code": "forbidden",
+        "message": "Server is in read-only mode (set GUARDIAN_ALLOW_WRITE=true to enable restarts)."
+      }
+    },
+    "isError": false
+  }
+}
+```
+
+Two details in that response:
+
+- **`isError` is `false`.** The call didn't fail at the protocol level. The refusal is the tool's normal return value, so Claude reads it as information it can act on, not a broken tool. That's the "errors as data" rule from earlier, visible on the wire.
+- **`structuredContent` is there because FastMCP 1.30 adds it.** Besides the human-readable `text` block, the SDK returns the tool's dict as structured JSON, so clients that support it don't have to parse the string.
+
+The daemon was never contacted. Read-only mode rejects the call before `get_client()` runs. Even with `GUARDIAN_ALLOW_WRITE=true`, `prod-payments` matches the `^prod-` denylist and would be refused after Docker resolves its canonical name.
+
 ## Connecting it to Claude
 
 **Claude Code**, running from the virtualenv:
