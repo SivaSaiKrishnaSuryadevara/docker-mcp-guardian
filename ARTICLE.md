@@ -1,5 +1,7 @@
 # How to Build a Secure Docker Management MCP Server for Claude Desktop and Claude Code
 
+> **Source Code & Test Harness:** The complete, tested codebase for this implementation is available on GitHub at [SivaSaiKrishnaSuryadevara/docker-mcp-guardian](https://github.com/SivaSaiKrishnaSuryadevara/docker-mcp-guardian).
+
 Here is a line I keep finding in Docker MCP server setups:
 
 ```yaml
