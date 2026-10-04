@@ -22,9 +22,9 @@ Every code block below comes from the working repository, and the test suite at 
 The server exposes four tools over stdio JSON-RPC:
 
 | Tool | Writes? | What it does |
-|---|---|---|
-| `list_containers` | No | Lists containers with status, health, restart count |
-| `inspect_container` | No | State, ports, mounts, labels, env var *names* only |
+| :--- | :---: | :--- |
+| `list_containers` | No | Lists containers with status, health, and restart count |
+| `inspect_container` | No | State, ports, mounts, labels, env var names only (values redacted) |
 | `get_container_logs` | No | Tails logs and scans them for error anomalies |
 | `safe_restart_container` | Yes | Restarts a container, only if write mode is on and the name passes the guard |
 
@@ -613,29 +613,60 @@ tests/test_server.py::test_all_tools_registered PASSED
 Mocked unit tests don't prove the JSON-RPC layer behaves. I also drove the real server as a subprocess, pointed `DOCKER_HOST` at a socket path that doesn't exist, and made sure every stdout line parsed as JSON:
 
 ```python
-import json, subprocess, sys
+import json
+import os
+import subprocess
+import sys
 
-env = {"PATH": "/usr/bin:/bin", "DOCKER_HOST": "unix:///nonexistent/docker.sock", "GUARDIAN_DOCKER_TIMEOUT": "2"}
-p = subprocess.Popen([sys.executable, "server.py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                     stderr=subprocess.DEVNULL, text=True, env=env)
+env = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "DOCKER_HOST": "unix:///nonexistent/docker.sock",
+    "GUARDIAN_DOCKER_TIMEOUT": "2",
+}
 
-def send(m): p.stdin.write(json.dumps(m) + "\n"); p.stdin.flush()
-def recv(): return json.loads(p.stdout.readline())
+p = subprocess.Popen(
+    [sys.executable, "server.py"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+    env=env,
+)
 
-send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}})
+def send(m):
+    p.stdin.write(json.dumps(m) + "\n")
+    p.stdin.flush()
+
+def recv():
+    return json.loads(p.stdout.readline())
+
+# Initialize handshake
+send({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "smoke", "version": "0"},
+    },
+})
 recv()
 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-calls = [("list_containers", {}),
-         ("safe_restart_container", {"container": "prod-api"}),
-         ("inspect_container", {"container": "web;rm -rf /"})]
+calls = [
+    ("list_containers", {}),
+    ("safe_restart_container", {"container": "prod-api"}),
+    ("inspect_container", {"container": "web;rm -rf /"}),
+]
+
 for i, (name, args) in enumerate(calls, start=2):
     send({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": name, "arguments": args}})
     err = json.loads(recv()["result"]["content"][0]["text"])["error"]
     print(f"{name}: {err['code']} — {err['message']}")
 
-p.stdin.close(); p.wait(timeout=10)
+p.stdin.close()
+p.wait(timeout=10)
 print("server still alive through all failures; clean exit code:", p.returncode)
 ```
 
@@ -670,8 +701,8 @@ claude mcp add docker-guardian -- \
 {
   "mcpServers": {
     "docker-guardian": {
-      "command": "/Users/you/docker-mcp-guardian/.venv/bin/python",
-      "args": ["/Users/you/docker-mcp-guardian/server.py"],
+      "command": "/path/to/docker-mcp-guardian/.venv/bin/python",
+      "args": ["/path/to/docker-mcp-guardian/server.py"],
       "env": {
         "GUARDIAN_ALLOW_WRITE": "false"
       }
