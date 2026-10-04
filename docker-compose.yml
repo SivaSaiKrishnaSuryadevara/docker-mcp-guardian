@@ -1,0 +1,48 @@
+# Test harness for the Docker MCP Guardian.
+#
+#   DOCKER_GID=$(stat -c %g /var/run/docker.sock) docker compose run --rm guardian
+#   docker compose run --rm tests
+#
+# Note on `:ro`: mounting the socket read-only stops the container from
+# replacing or deleting the socket file, but it does NOT make the Docker API
+# read-only — any process that can open the socket can issue write calls.
+# The real write guard is GUARDIAN_ALLOW_WRITE plus the restart deny/allow
+# regexes enforced inside server.py. For a hard API-level boundary, point
+# DOCKER_HOST at a filtering proxy (e.g. tecnativa/docker-socket-proxy with
+# only CONTAINERS=1) instead of the raw socket.
+
+services:
+  guardian:
+    build:
+      context: .
+      args:
+        APP_UID: "10001"
+        APP_GID: "10001"
+        DOCKER_GID: "${DOCKER_GID:-999}"
+    image: docker-mcp-guardian:latest
+    stdin_open: true   # MCP stdio transport
+    tty: false         # a TTY would corrupt the JSON-RPC stream
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      GUARDIAN_ALLOW_WRITE: "${GUARDIAN_ALLOW_WRITE:-false}"
+      GUARDIAN_RESTART_DENY_REGEX: "${GUARDIAN_RESTART_DENY_REGEX:-^(prod|db|kube|vault)-.*}"
+      GUARDIAN_RESTART_ALLOW_REGEX: "${GUARDIAN_RESTART_ALLOW_REGEX:-}"
+      GUARDIAN_DOCKER_TIMEOUT: "${GUARDIAN_DOCKER_TIMEOUT:-5}"
+      GUARDIAN_LOG_LEVEL: "${GUARDIAN_LOG_LEVEL:-INFO}"
+
+  tests:
+    image: python:3.12-slim
+    working_dir: /src
+    volumes:
+      - .:/src:ro
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: >
+      sh -c "pip install -q -r requirements.txt && python -m pytest tests/ -v -p no:cacheprovider"
