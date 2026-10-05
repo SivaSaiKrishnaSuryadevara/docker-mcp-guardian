@@ -50,4 +50,8 @@ For Claude Desktop, add the same interpreter and script paths (absolute) under `
 
 ## Write-up
 
-The design decisions behind this server are covered in [ARTICLE.md](ARTICLE.md).
+The security model, tool surface, and policy engine are documented in [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
+
+## Deep Dive & Publications
+
+A hands-on implementation and security analysis guide is currently under editorial review for HackerNoon. The direct publication link will be posted here upon release.
