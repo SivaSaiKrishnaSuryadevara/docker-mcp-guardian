@@ -31,6 +31,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      # This harness mounts the rootful socket on purpose, so it names it
+      # explicitly; Guardian never falls back to /var/run/docker.sock on its own.
+      DOCKER_HOST: "unix:///var/run/docker.sock"
       GUARDIAN_ALLOW_WRITE: "${GUARDIAN_ALLOW_WRITE:-false}"
       GUARDIAN_RESTART_DENY_REGEX: "${GUARDIAN_RESTART_DENY_REGEX:-^(prod|db|kube|vault)-.*}"
       GUARDIAN_RESTART_ALLOW_REGEX: "${GUARDIAN_RESTART_ALLOW_REGEX:-}"

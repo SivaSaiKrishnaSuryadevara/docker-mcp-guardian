@@ -33,10 +33,24 @@ def make_container(name="web-api", status="running", logs=b"", attrs=None):
     return c
 
 
+TEST_DOCKER_HOST = "unix:///tmp/guardian-test-docker.sock"
+
+
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("GUARDIAN_ALLOW_WRITE", "GUARDIAN_RESTART_DENY_REGEX", "GUARDIAN_RESTART_ALLOW_REGEX", "GUARDIAN_ANOMALY_REGEX"):
+    for var in (
+        "GUARDIAN_ALLOW_WRITE",
+        "GUARDIAN_RESTART_DENY_REGEX",
+        "GUARDIAN_RESTART_ALLOW_REGEX",
+        "GUARDIAN_ANOMALY_REGEX",
+        "GUARDIAN_ALLOW_ROOTFUL",
+        "XDG_RUNTIME_DIR",
+    ):
         monkeypatch.delenv(var, raising=False)
+    # Tool tests mock docker.from_env; give them an explicit endpoint so socket
+    # resolution never depends on the machine running the tests.
+    monkeypatch.setenv("DOCKER_HOST", TEST_DOCKER_HOST)
+    monkeypatch.setattr(server, "_last_resolution", None)
 
 
 @pytest.fixture
@@ -200,12 +214,128 @@ class TestDaemonFailures:
         monkeypatch.setenv("GUARDIAN_DOCKER_TIMEOUT", "3")
         client.containers.list.return_value = []
         server.list_containers()
-        server.docker.from_env.assert_called_once_with(timeout=3)
+        server.docker.from_env.assert_called_once()
+        assert server.docker.from_env.call_args.kwargs["timeout"] == 3
 
     def test_restart_with_daemon_down(self, monkeypatch):
         monkeypatch.setenv("GUARDIAN_ALLOW_WRITE", "true")
         monkeypatch.setattr(server.docker, "from_env", MagicMock(side_effect=DockerException("daemon down")))
         assert server.safe_restart_container("web-api")["error"]["code"] == "daemon_unavailable"
+
+
+# ---------------------------------------------------------------- socket resolution
+
+ROOTFUL = "/var/run/docker.sock"
+
+
+@pytest.fixture
+def sockets(monkeypatch):
+    """Declare which paths exist as sockets; everything else is absent."""
+    existing: set[str] = set()
+    monkeypatch.setattr(server, "_is_socket", lambda path: path in existing)
+    monkeypatch.setattr(server.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    return existing
+
+
+class TestSocketResolution:
+    def test_explicit_docker_host_wins_over_rootless(self, sockets, monkeypatch):
+        sockets.add("/run/user/1000/docker.sock")
+        monkeypatch.setenv("DOCKER_HOST", "tcp://10.0.0.5:2376")
+        assert server.resolve_docker_host() == ("tcp://10.0.0.5:2376", "DOCKER_HOST is set")
+
+    def test_blank_docker_host_is_treated_as_unset(self, sockets, monkeypatch):
+        sockets.add("/run/user/1000/docker.sock")
+        monkeypatch.setenv("DOCKER_HOST", "   ")
+        assert server.resolve_docker_host()[0] == "unix:///run/user/1000/docker.sock"
+
+    def test_rootless_socket_from_xdg_runtime_dir(self, sockets, monkeypatch):
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/2000")
+        sockets.add("/run/user/2000/docker.sock")
+        assert server.resolve_docker_host() == ("unix:///run/user/2000/docker.sock", "rootless Docker socket found")
+
+    def test_rootless_socket_found_without_xdg_runtime_dir(self, sockets):
+        # MCP clients often spawn servers without XDG_RUNTIME_DIR.
+        sockets.add("/run/user/1000/docker.sock")
+        assert server.resolve_docker_host()[0] == "unix:///run/user/1000/docker.sock"
+
+    def test_xdg_path_that_is_not_a_socket_falls_through(self, sockets, monkeypatch):
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/not-a-runtime-dir")
+        sockets.add("/run/user/1000/docker.sock")
+        assert server.resolve_docker_host()[0] == "unix:///run/user/1000/docker.sock"
+
+    def test_rootless_preferred_even_when_rootful_is_allowed(self, sockets, monkeypatch):
+        monkeypatch.setenv("GUARDIAN_ALLOW_ROOTFUL", "true")
+        sockets.update({ROOTFUL, "/run/user/1000/docker.sock"})
+        assert server.resolve_docker_host()[0] == "unix:///run/user/1000/docker.sock"
+
+    def test_rootful_socket_refused_without_opt_in(self, sockets):
+        sockets.add(ROOTFUL)
+        with pytest.raises(server.SocketResolutionError, match="GUARDIAN_ALLOW_ROOTFUL=true"):
+            server.resolve_docker_host()
+
+    def test_rootful_socket_used_with_opt_in_and_warns(self, sockets, monkeypatch, caplog):
+        monkeypatch.setenv("GUARDIAN_ALLOW_ROOTFUL", "true")
+        sockets.add(ROOTFUL)
+        fake = MagicMock()
+        monkeypatch.setattr(server.docker, "from_env", MagicMock(return_value=fake))
+        fake.containers.list.return_value = []
+        with caplog.at_level("WARNING", logger="docker-mcp-guardian"):
+            assert server.list_containers()["ok"] is True
+        assert "root-equivalent" in caplog.text
+        assert server.docker.from_env.call_args.kwargs["environment"]["DOCKER_HOST"] == f"unix://{ROOTFUL}"
+
+    def test_no_socket_fails_closed(self, sockets):
+        with pytest.raises(server.SocketResolutionError, match="No Docker socket found"):
+            server.resolve_docker_host()
+
+    def test_tools_return_structured_error_and_never_connect(self, sockets, monkeypatch):
+        sockets.add(ROOTFUL)  # present but not opted in
+        monkeypatch.setattr(server.docker, "from_env", MagicMock())
+        result = server.list_containers()
+        assert result["ok"] is False
+        assert result["error"]["code"] == "docker_socket_unresolved"
+        server.docker.from_env.assert_not_called()
+
+    def test_client_receives_resolved_host_and_keeps_tls_settings(self, sockets, monkeypatch):
+        sockets.add("/run/user/1000/docker.sock")
+        monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
+        fake = MagicMock()
+        monkeypatch.setattr(server.docker, "from_env", MagicMock(return_value=fake))
+        fake.containers.list.return_value = []
+        server.list_containers()
+        env = server.docker.from_env.call_args.kwargs["environment"]
+        assert env["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
+        assert env["DOCKER_TLS_VERIFY"] == "1"
+
+    def test_resolution_is_logged_once_per_change(self, sockets, monkeypatch, caplog):
+        sockets.add("/run/user/1000/docker.sock")
+        fake = MagicMock()
+        monkeypatch.setattr(server.docker, "from_env", MagicMock(return_value=fake))
+        fake.containers.list.return_value = []
+        with caplog.at_level("INFO", logger="docker-mcp-guardian"):
+            server.list_containers()
+            server.list_containers()
+        assert caplog.text.count("Using Docker endpoint unix:///run/user/1000/docker.sock") == 1
+
+    @pytest.mark.skipif(not hasattr(__import__("socket"), "AF_UNIX"), reason="needs Unix domain sockets")
+    def test_real_socket_detection(self):
+        import shutil
+        import socket
+        import tempfile
+
+        # Short directory: Unix socket paths are limited to ~104 bytes on macOS.
+        workdir = Path(tempfile.mkdtemp(dir="/tmp"))
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(workdir / "d.sock"))
+            assert server._is_socket(str(workdir / "d.sock")) is True
+            (workdir / "file").write_text("x")
+            assert server._is_socket(str(workdir / "file")) is False
+            assert server._is_socket(str(workdir / "missing")) is False
+        finally:
+            sock.close()
+            shutil.rmtree(workdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- d) log anomaly scanner

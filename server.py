@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import sys
 from typing import Any
 
@@ -66,18 +67,100 @@ def _error(code: str, message: str, **extra: Any) -> dict[str, Any]:
 # Docker client handling
 # ---------------------------------------------------------------------------
 
+ROOTFUL_SOCKET = "/var/run/docker.sock"
+
+
 class DaemonUnavailable(Exception):
     """Raised internally when the Docker daemon cannot be reached."""
 
 
+class SocketResolutionError(Exception):
+    """Raised when no acceptable Docker endpoint can be chosen."""
+
+
+def _is_socket(path: str) -> bool:
+    try:
+        return stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _rootless_socket_candidates() -> list[str]:
+    """Rootless socket locations, most specific first.
+
+    MCP clients often spawn servers without ``XDG_RUNTIME_DIR``, so the
+    systemd default ``/run/user/<uid>`` is checked as well.
+    """
+    candidates = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if runtime_dir:
+        candidates.append(os.path.join(runtime_dir, "docker.sock"))
+    getuid = getattr(os, "getuid", None)  # absent on Windows
+    if getuid is not None:
+        fallback = f"/run/user/{getuid()}/docker.sock"
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
+def resolve_docker_host() -> tuple[str, str]:
+    """Return ``(docker_host, reason)`` for the endpoint Guardian should use.
+
+    Order: an explicit ``DOCKER_HOST``; then a rootless socket; then the rootful
+    system socket, but only when ``GUARDIAN_ALLOW_ROOTFUL`` is set. The system
+    socket is never chosen while a rootless socket exists, and nothing falls
+    back silently: if no acceptable endpoint exists, this raises.
+    """
+    explicit = os.environ.get("DOCKER_HOST", "").strip()
+    if explicit:
+        return explicit, "DOCKER_HOST is set"
+
+    for path in _rootless_socket_candidates():
+        if _is_socket(path):
+            return f"unix://{path}", "rootless Docker socket found"
+
+    if _is_socket(ROOTFUL_SOCKET):
+        if _env_flag("GUARDIAN_ALLOW_ROOTFUL"):
+            return f"unix://{ROOTFUL_SOCKET}", "rootful socket allowed by GUARDIAN_ALLOW_ROOTFUL"
+        raise SocketResolutionError(
+            f"Only the rootful socket {ROOTFUL_SOCKET} was found, and Guardian does not use it implicitly. "
+            f"Set DOCKER_HOST=unix://{ROOTFUL_SOCKET} or GUARDIAN_ALLOW_ROOTFUL=true to use it, "
+            "or start rootless Docker and set DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock."
+        )
+
+    raise SocketResolutionError(
+        "No Docker socket found. Set DOCKER_HOST, for example "
+        "unix://$XDG_RUNTIME_DIR/docker.sock for rootless Docker."
+    )
+
+
+_last_resolution: tuple[str, str] | None = None
+
+
+def _log_resolution(docker_host: str, reason: str) -> None:
+    """Log the chosen endpoint once, and again whenever it changes."""
+    global _last_resolution
+    if _last_resolution == (docker_host, reason):
+        return
+    _last_resolution = (docker_host, reason)
+    if reason.startswith("rootful"):
+        log.warning("Using the rootful Docker socket %s (%s); API access is root-equivalent.", docker_host, reason)
+    else:
+        log.info("Using Docker endpoint %s (%s).", docker_host, reason)
+
+
 def get_client() -> docker.DockerClient:
-    """Connect via DOCKER_HOST / the default socket, with a bounded timeout.
+    """Connect to the resolved Docker endpoint with a bounded timeout.
 
     ``ping()`` forces a round trip so a dead or missing socket surfaces here,
-    not halfway through a tool call.
+    not halfway through a tool call. The resolved host is passed through
+    docker-py's normal environment handling, so TLS variables still apply.
     """
+    docker_host, reason = resolve_docker_host()
+    _log_resolution(docker_host, reason)
+    environment = dict(os.environ, DOCKER_HOST=docker_host)
     try:
-        client = docker.from_env(timeout=_socket_timeout())
+        client = docker.from_env(timeout=_socket_timeout(), environment=environment)
         client.ping()
         return client
     except (DockerException, RequestsConnectionError, ReadTimeout, OSError) as exc:
@@ -94,6 +177,9 @@ def _run(action):
     """Run ``action(client)``, translating every daemon failure into a structured error."""
     try:
         client = get_client()
+    except SocketResolutionError as exc:
+        log.warning("Docker socket not resolved: %s", exc)
+        return _error("docker_socket_unresolved", str(exc))
     except DaemonUnavailable as exc:
         log.warning("Docker daemon unavailable: %s", exc)
         return _error("daemon_unavailable", "Docker daemon is unreachable or timed out.", detail=str(exc))
