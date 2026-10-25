@@ -62,6 +62,45 @@ If none applies, tools return a `docker_socket_unresolved` error instead of conn
 
 > **Upgrading:** earlier versions fell back to `/var/run/docker.sock` silently. If you rely on the rootful daemon, set `DOCKER_HOST=unix:///var/run/docker.sock` (or `GUARDIAN_ALLOW_ROOTFUL=true`) in your MCP server definition. Docker Desktop and Colima users should set `DOCKER_HOST` to their socket, for example `unix://$HOME/.docker/run/docker.sock` or `unix://$HOME/.colima/default/docker.sock`.
 
+### Rootless Docker
+
+MCP clients (Claude Desktop, Claude Code, Cursor, Cline) start Guardian as a child process, often with a reduced environment that has no `XDG_RUNTIME_DIR` or `DOCKER_HOST`. Guardian still checks `/run/user/<uid>/docker.sock`, but if your rootless runtime directory is elsewhere, or you want the endpoint pinned, set `DOCKER_HOST` in the server definition:
+
+```json
+{
+  "mcpServers": {
+    "docker-guardian": {
+      "command": "/path/to/docker-mcp-guardian/.venv/bin/python",
+      "args": ["/path/to/docker-mcp-guardian/server.py"],
+      "env": {
+        "DOCKER_HOST": "unix:///run/user/1000/docker.sock"
+      }
+    }
+  }
+}
+```
+
+Write the path literally: most clients do not expand `$XDG_RUNTIME_DIR` or `$HOME` in `env`. To find the value for your user, run either of these in a shell where rootless Docker works:
+
+```bash
+echo "unix://$XDG_RUNTIME_DIR/docker.sock"
+docker context inspect rootless --format '{{.Endpoints.docker.Host}}'
+```
+
+With Claude Code, the shell expands the variable when the server is added:
+
+```bash
+claude mcp add docker-guardian -e DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock" -- "$PWD/.venv/bin/python" "$PWD/server.py"
+```
+
+To confirm the endpoint is the rootless daemon, check that this lists `name=rootless`:
+
+```bash
+DOCKER_HOST=unix:///run/user/1000/docker.sock docker info --format '{{.SecurityOptions}}'
+```
+
+On the first tool call, Guardian logs the endpoint it chose to stderr, for example `Using Docker endpoint unix:///run/user/1000/docker.sock (DOCKER_HOST is set).`
+
 ## Write-up
 
 The security model, tool surface, and policy engine are documented in [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
