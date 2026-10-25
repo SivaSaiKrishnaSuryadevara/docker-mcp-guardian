@@ -47,6 +47,20 @@ For Claude Desktop, add the same interpreter and script paths (absolute) under `
 | `GUARDIAN_ANOMALY_REGEX` | error/exception/fatal/... | Pattern the log scanner flags |
 | `GUARDIAN_DOCKER_TIMEOUT` | `5` | Seconds per Docker API call |
 | `GUARDIAN_LOG_LEVEL` | `INFO` | Log level (logs go to stderr only) |
+| `DOCKER_HOST` | *(unset)* | Docker endpoint to use; always wins when set |
+| `GUARDIAN_ALLOW_ROOTFUL` | `false` | Allow falling back to the rootful `/var/run/docker.sock` |
+
+### Docker endpoint resolution
+
+Guardian picks its Docker endpoint in this order, and logs the choice to stderr:
+
+1. `DOCKER_HOST`, if set.
+2. A rootless Docker socket: `$XDG_RUNTIME_DIR/docker.sock`, then `/run/user/<uid>/docker.sock`. The second path covers MCP clients that start servers without `XDG_RUNTIME_DIR`.
+3. The rootful `/var/run/docker.sock`, only when `GUARDIAN_ALLOW_ROOTFUL=true`. Guardian logs a warning, because rootful API access is root-equivalent.
+
+If none applies, tools return a `docker_socket_unresolved` error instead of connecting. The system socket is never used while a rootless socket exists.
+
+> **Upgrading:** earlier versions fell back to `/var/run/docker.sock` silently. If you rely on the rootful daemon, set `DOCKER_HOST=unix:///var/run/docker.sock` (or `GUARDIAN_ALLOW_ROOTFUL=true`) in your MCP server definition. Docker Desktop and Colima users should set `DOCKER_HOST` to their socket, for example `unix://$HOME/.docker/run/docker.sock` or `unix://$HOME/.colima/default/docker.sock`.
 
 ## Write-up
 

@@ -21,7 +21,8 @@ Out of scope: Guardian is not a socket proxy. The Guardian process itself holds 
    ├── Restart policy (deny regex, optional allow regex)
    ├── Response shaping (env values withheld, line caps)
    └── Error translation (all failures returned as {"ok": false, "error": {...}})
-        │  docker-py over DOCKER_HOST / default socket, bounded timeout
+        │  docker-py over the resolved endpoint (DOCKER_HOST, then rootless;
+        │  rootful only with GUARDIAN_ALLOW_ROOTFUL), bounded timeout
         ▼
 [ Docker Engine ]
 ```
@@ -49,6 +50,8 @@ No tool creates, executes in, stops, removes, or prunes containers, images, volu
 
 - **Secret withholding in inspection.** `inspect_container` returns environment variable names only (`env_keys`); values are never read into the response. Labels, ports, mounts, and restart policy are returned as-is.
 
+- **Fail-closed endpoint resolution.** Guardian connects to an explicit `DOCKER_HOST`, else a rootless socket (`$XDG_RUNTIME_DIR/docker.sock`, then `/run/user/<uid>/docker.sock`). It uses the rootful `/var/run/docker.sock` only with `GUARDIAN_ALLOW_ROOTFUL=true`, and logs a warning when it does. Otherwise tools return `docker_socket_unresolved` without connecting, so a missing environment variable can never silently route an agent to the root daemon.
+
 - **Bounded daemon calls.** Every client is created with `GUARDIAN_DOCKER_TIMEOUT` (default 5 s) and verified with `ping()`. Unreachable or slow daemons yield `daemon_unavailable` instead of a hung session.
 
 - **Structured errors.** `NotFound`, API errors, client errors, and timeouts are translated into `{"ok": false, "error": {"code", "message", "detail"}}`; exceptions do not propagate to the client.
@@ -71,6 +74,8 @@ No tool creates, executes in, stops, removes, or prunes containers, images, volu
 | `GUARDIAN_ANOMALY_REGEX` | error/exception/fatal/… | Default log anomaly pattern |
 | `GUARDIAN_DOCKER_TIMEOUT` | `5` | Seconds per Docker API call |
 | `GUARDIAN_LOG_LEVEL` | `INFO` | stderr log level |
+| `DOCKER_HOST` | unset | Explicit Docker endpoint; always wins |
+| `GUARDIAN_ALLOW_ROOTFUL` | `false` | Permits the rootful `/var/run/docker.sock` when no rootless socket exists |
 
 ### Container deployment
 
