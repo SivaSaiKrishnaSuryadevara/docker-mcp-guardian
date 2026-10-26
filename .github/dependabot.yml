@@ -8,6 +8,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # mcp 2.x renames FastMCP to MCPServer; upgrading is a migration, not a bump.
+      - dependency-name: mcp
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /
     schedule:
