@@ -1,5 +1,5 @@
 mcp>=1.0.0,<2
-docker>=7.0.0
+docker>=7.2.0
 regex>=2024.4.16
 pydantic>=2.0.0
 pytest>=8.0.0
