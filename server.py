@@ -263,11 +263,9 @@ def _summarize(container) -> dict[str, Any]:
     return {
         "id": container.short_id,
         "name": container.name,
-        "image": (
-            container.image.tags[0]
-            if container.image and container.image.tags
-            else attrs.get("Config", {}).get("Image")
-        ),
+        # The reference the container was created from, as `docker ps` shows it.
+        # Reading `container.image` instead costs an image-inspect request per access.
+        "image": attrs.get("Config", {}).get("Image"),
         "status": container.status,
         "health": (state.get("Health") or {}).get("Status"),
         "restart_count": attrs.get("RestartCount"),

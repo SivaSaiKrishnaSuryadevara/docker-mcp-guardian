@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 from docker.errors import DockerException, NotFound
@@ -97,6 +97,15 @@ class TestReadOnlyInspection:
         info = server.inspect_container("web-api")["container"]
         assert info["env_keys"] == ["DATABASE_URL", "PORT"]
         assert "secret" not in repr(info)
+
+    def test_list_does_not_inspect_images(self, client):
+        container = make_container()
+        type(container).image = PropertyMock(side_effect=AssertionError("image lookup per container"))
+        client.containers.list.return_value = [container]
+
+        result = server.list_containers()
+
+        assert result["containers"][0]["image"] == "web-api:1.4.2"
 
     def test_list_containers(self, client):
         client.containers.list.return_value = [make_container("a"), make_container("b", status="exited")]
