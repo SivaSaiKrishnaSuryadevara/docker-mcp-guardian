@@ -42,6 +42,7 @@ mcp = FastMCP("docker-mcp-guardian")
 # Configuration (read per call so tests and operators can change env safely)
 # ---------------------------------------------------------------------------
 
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -140,8 +141,7 @@ def resolve_docker_host() -> tuple[str, str]:
         )
 
     raise SocketResolutionError(
-        "No Docker socket found. Set DOCKER_HOST, for example "
-        "unix://$XDG_RUNTIME_DIR/docker.sock for rootless Docker."
+        "No Docker socket found. Set DOCKER_HOST, for example unix://$XDG_RUNTIME_DIR/docker.sock for rootless Docker."
     )
 
 
@@ -180,7 +180,9 @@ def get_client() -> docker.DockerClient:
 
 def _validate_ref(ref: str) -> dict[str, Any] | None:
     if not isinstance(ref, str) or not CONTAINER_REF_RE.match(ref):
-        return _error("invalid_container_ref", "Container reference must be a name or ID: [A-Za-z0-9_.-], max 128 chars.")
+        return _error(
+            "invalid_container_ref", "Container reference must be a name or ID: [A-Za-z0-9_.-], max 128 chars."
+        )
     return None
 
 
@@ -209,6 +211,7 @@ def _run(action):
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested directly)
 # ---------------------------------------------------------------------------
+
 
 def restart_policy_decision(name: str) -> tuple[bool, str]:
     """Return (allowed, reason) for restarting a container with this resolved name."""
@@ -273,6 +276,7 @@ def _summarize(container) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def list_containers(all: bool = False) -> dict[str, Any]:

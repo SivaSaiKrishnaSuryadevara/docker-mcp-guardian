@@ -24,8 +24,17 @@ def make_container(name="web-api", status="running", logs=b"", attrs=None):
     c.attrs = attrs or {
         "Created": "2026-10-01T00:00:00Z",
         "RestartCount": 2,
-        "State": {"StartedAt": "2026-10-01T00:00:01Z", "ExitCode": 0, "OOMKilled": False, "Health": {"Status": "healthy"}},
-        "Config": {"Image": "web-api:1.4.2", "Env": ["DATABASE_URL=postgres://u:secret@db/app", "PORT=8080"], "Labels": {"team": "core"}},
+        "State": {
+            "StartedAt": "2026-10-01T00:00:01Z",
+            "ExitCode": 0,
+            "OOMKilled": False,
+            "Health": {"Status": "healthy"},
+        },
+        "Config": {
+            "Image": "web-api:1.4.2",
+            "Env": ["DATABASE_URL=postgres://u:secret@db/app", "PORT=8080"],
+            "Labels": {"team": "core"},
+        },
         "NetworkSettings": {"Ports": {"8080/tcp": [{"HostPort": "8080"}]}},
         "Mounts": [{"Source": "/data", "Destination": "/var/data", "RW": False}],
         "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
@@ -63,6 +72,7 @@ def client(monkeypatch):
 
 
 # ---------------------------------------------------------------- a) read-only inspection
+
 
 class TestReadOnlyInspection:
     def test_inspect_returns_summary_without_mutating(self, client):
@@ -118,6 +128,7 @@ class TestReadOnlyInspection:
 
 
 # ---------------------------------------------------------------- b) restart guard
+
 
 class TestRestartGuard:
     def test_read_only_by_default_blocks_any_restart(self, client):
@@ -186,6 +197,7 @@ class TestRestartGuard:
 
 
 # ---------------------------------------------------------------- c) daemon down / timeouts
+
 
 class TestDaemonFailures:
     @pytest.mark.parametrize(
@@ -457,8 +469,14 @@ class TestRegexTimeBudget:
 
 # ---------------------------------------------------------------- MCP registration
 
+
 def test_all_tools_registered():
     import asyncio
 
     tools = asyncio.run(server.mcp.list_tools())
-    assert {t.name for t in tools} == {"list_containers", "inspect_container", "get_container_logs", "safe_restart_container"}
+    assert {t.name for t in tools} == {
+        "list_containers",
+        "inspect_container",
+        "get_container_logs",
+        "safe_restart_container",
+    }
