@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -43,6 +44,7 @@ def clean_env(monkeypatch):
         "GUARDIAN_RESTART_DENY_REGEX",
         "GUARDIAN_RESTART_ALLOW_REGEX",
         "GUARDIAN_ANOMALY_REGEX",
+        "GUARDIAN_REGEX_TIMEOUT",
         "GUARDIAN_ALLOW_ROOTFUL",
         "XDG_RUNTIME_DIR",
     ):
@@ -398,6 +400,50 @@ class TestLogAnomalyScanner:
         result = server.get_container_logs("web-api")
         assert result["ok"] is True
         assert result["scan"]["anomaly_count"] == 1
+
+
+# ---------------------------------------------------------------- e) regex time budget
+
+# Backreferences defeat the regex module's backtracking safeguards, so this
+# pair runs far past any reasonable budget without a timeout.
+SLOW_REGEX = r"(a|aa)+\1$"
+SLOW_LOG = b"a" * 40 + b"!\n"
+
+
+class TestRegexTimeBudget:
+    def test_slow_agent_regex_returns_structured_error(self, client, monkeypatch):
+        monkeypatch.setenv("GUARDIAN_REGEX_TIMEOUT", "0.2")
+        client.containers.get.return_value = make_container(logs=SLOW_LOG)
+
+        started = time.monotonic()
+        result = server.get_container_logs("web-api", anomaly_regex=SLOW_REGEX)
+
+        assert result["error"]["code"] == "regex_timeout"
+        assert result["error"]["container"] == "web-api"
+        assert time.monotonic() - started < 2
+
+    def test_slow_operator_default_is_bounded_too(self, client, monkeypatch):
+        monkeypatch.setenv("GUARDIAN_REGEX_TIMEOUT", "0.2")
+        monkeypatch.setenv("GUARDIAN_ANOMALY_REGEX", SLOW_REGEX)
+        client.containers.get.return_value = make_container(logs=SLOW_LOG)
+        assert server.get_container_logs("web-api")["error"]["code"] == "regex_timeout"
+
+    def test_budget_covers_the_whole_scan_not_each_line(self, monkeypatch):
+        monkeypatch.setenv("GUARDIAN_REGEX_TIMEOUT", "0.2")
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            server.scan_log_anomalies(SLOW_LOG.decode() * 50, SLOW_REGEX)
+        assert time.monotonic() - started < 2
+
+    def test_overlong_regex_rejected_before_touching_docker(self, client):
+        result = server.get_container_logs("web-api", anomaly_regex="a" * (server.MAX_REGEX_LENGTH + 1))
+        assert result["error"]["code"] == "invalid_regex"
+        client.containers.get.assert_not_called()
+
+    @pytest.mark.parametrize("raw, expected", [("2.5", 2.5), ("bogus", 1.0), ("0", 0.01), ("-3", 0.01)])
+    def test_timeout_setting_is_parsed_defensively(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("GUARDIAN_REGEX_TIMEOUT", raw)
+        assert server._regex_timeout() == expected
 
 
 # ---------------------------------------------------------------- MCP registration

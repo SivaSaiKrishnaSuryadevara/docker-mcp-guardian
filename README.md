@@ -45,6 +45,7 @@ For Claude Desktop, add the same interpreter and script paths (absolute) under `
 | `GUARDIAN_RESTART_DENY_REGEX` | `^(prod\|db\|kube\|vault)-.*` | Containers that can never be restarted (always wins) |
 | `GUARDIAN_RESTART_ALLOW_REGEX` | *(unset)* | If set, only matching containers can be restarted |
 | `GUARDIAN_ANOMALY_REGEX` | error/exception/fatal/... | Pattern the log scanner flags |
+| `GUARDIAN_REGEX_TIMEOUT` | `1` | Total seconds one log scan may spend matching; slower scans return `regex_timeout` |
 | `GUARDIAN_DOCKER_TIMEOUT` | `5` | Seconds per Docker API call |
 | `GUARDIAN_LOG_LEVEL` | `INFO` | Log level (logs go to stderr only) |
 | `DOCKER_HOST` | *(unset)* | Docker endpoint to use; always wins when set |

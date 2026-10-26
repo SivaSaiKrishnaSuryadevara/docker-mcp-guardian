@@ -13,9 +13,11 @@ import os
 import re
 import stat
 import sys
+import time
 from typing import Any
 
 import docker
+import regex
 from docker.errors import APIError, DockerException, NotFound
 from mcp.server.fastmcp import FastMCP
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -31,6 +33,7 @@ DEFAULT_ANOMALY_PATTERN = (
 CONTAINER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_TAIL = 5000
 MAX_RETURNED_LINES = 500
+MAX_REGEX_LENGTH = 512
 
 mcp = FastMCP("docker-mcp-guardian")
 
@@ -48,6 +51,14 @@ def _socket_timeout() -> int:
         return max(1, int(os.environ.get("GUARDIAN_DOCKER_TIMEOUT", "5")))
     except ValueError:
         return 5
+
+
+def _regex_timeout() -> float:
+    """Total seconds one log scan may spend matching, across all lines."""
+    try:
+        return max(0.01, float(os.environ.get("GUARDIAN_REGEX_TIMEOUT", "1")))
+    except ValueError:
+        return 1.0
 
 
 def _deny_regex() -> re.Pattern[str]:
@@ -212,13 +223,23 @@ def restart_policy_decision(name: str) -> tuple[bool, str]:
 
 
 def scan_log_anomalies(text: str, pattern: str | None = None) -> dict[str, Any]:
-    regex = re.compile(pattern or os.environ.get("GUARDIAN_ANOMALY_REGEX", DEFAULT_ANOMALY_PATTERN))
+    """Scan log lines for anomalies within a total time budget.
+
+    The pattern may come from the agent and the text from any container, so a
+    backtracking-heavy pair could otherwise stall the event loop that serves
+    every tool. Matching uses the ``regex`` module's timeout and raises
+    ``TimeoutError`` once ``GUARDIAN_REGEX_TIMEOUT`` is spent.
+    """
+    compiled = regex.compile(pattern or os.environ.get("GUARDIAN_ANOMALY_REGEX", DEFAULT_ANOMALY_PATTERN))
+    deadline = time.monotonic() + _regex_timeout()
     lines = text.splitlines()
-    hits = [
-        {"line_number": i, "match": m.group(0), "line": line[:1000]}
-        for i, line in enumerate(lines, start=1)
-        if (m := regex.search(line))
-    ]
+    hits = []
+    for i, line in enumerate(lines, start=1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("anomaly scan exceeded its time budget")
+        if m := compiled.search(line, timeout=remaining):
+            hits.append({"line_number": i, "match": m.group(0), "line": line[:1000]})
     counts: dict[str, int] = {}
     for hit in hits:
         key = hit["match"].lower()
@@ -297,9 +318,11 @@ def get_container_logs(container: str, tail: int = 200, anomaly_regex: str | Non
     if not isinstance(tail, int) or not 1 <= tail <= MAX_TAIL:
         return _error("invalid_tail", f"tail must be between 1 and {MAX_TAIL}.")
     if anomaly_regex is not None:
+        if len(anomaly_regex) > MAX_REGEX_LENGTH:
+            return _error("invalid_regex", f"anomaly_regex must be at most {MAX_REGEX_LENGTH} characters.")
         try:
-            re.compile(anomaly_regex)
-        except re.error as exc:
+            regex.compile(anomaly_regex)
+        except regex.error as exc:
             return _error("invalid_regex", f"anomaly_regex does not compile: {exc}")
 
     def action(c):
@@ -307,12 +330,21 @@ def get_container_logs(container: str, tail: int = 200, anomaly_regex: str | Non
         raw = obj.logs(tail=tail, stdout=True, stderr=True, timestamps=False)
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
         lines = text.splitlines()
+        try:
+            scan = scan_log_anomalies(text, anomaly_regex)
+        except TimeoutError:
+            log.warning("Log scan of %s exceeded GUARDIAN_REGEX_TIMEOUT", obj.name)
+            return _error(
+                "regex_timeout",
+                "Log scan exceeded its time budget; use a simpler anomaly_regex or raise GUARDIAN_REGEX_TIMEOUT.",
+                container=obj.name,
+            )
         return {
             "ok": True,
             "container": obj.name,
             "tail": tail,
             "lines": lines[-MAX_RETURNED_LINES:],
-            "scan": scan_log_anomalies(text, anomaly_regex),
+            "scan": scan,
         }
 
     return _run(action)
