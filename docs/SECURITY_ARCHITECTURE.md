@@ -33,14 +33,14 @@ Out of scope: Guardian is not a socket proxy. The Guardian process itself holds 
 |---|---|---|
 | `list_containers(all=false)` | Read | Daemon timeout |
 | `inspect_container(container)` | Read | Ref validation; env values withheld |
-| `get_container_logs(container, tail=200, anomaly_regex=None)` | Read | Ref validation; `1 ≤ tail ≤ 5000`; regex must compile; ≤ 500 lines and ≤ 500 anomaly hits returned |
+| `get_container_logs(container, tail=200, anomaly_regex=None)` | Read | Ref validation; `1 ≤ tail ≤ 5000`; regex ≤ 512 chars and must compile; scan time budget; ≤ 500 lines and ≤ 500 anomaly hits returned |
 | `safe_restart_container(container, timeout=10)` | **Write** | Ref validation; `0 ≤ timeout ≤ 120`; write gate; canonical-name policy check |
 
 No tool creates, executes in, stops, removes, or prunes containers, images, volumes, or networks.
 
 ## 3. Core Protection Mechanisms
 
-- **Input validation.** Container references must match `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`. Numeric arguments are range-checked and a caller-supplied `anomaly_regex` must compile. Violations return `invalid_container_ref`, `invalid_tail`, `invalid_timeout`, or `invalid_regex` without contacting the daemon.
+- **Input validation.** Container references must match `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`. Numeric arguments are range-checked and a caller-supplied `anomaly_regex` must compile and be at most 512 characters. Violations return `invalid_container_ref`, `invalid_tail`, `invalid_timeout`, or `invalid_regex` without contacting the daemon.
 
 - **Fail-closed write gate.** `safe_restart_container` returns `forbidden` unless `GUARDIAN_ALLOW_WRITE=true`. In read-only mode the check runs before any Docker API call.
 
@@ -51,6 +51,8 @@ No tool creates, executes in, stops, removes, or prunes containers, images, volu
 - **Secret withholding in inspection.** `inspect_container` returns environment variable names only (`env_keys`); values are never read into the response. Labels, ports, mounts, and restart policy are returned as-is.
 
 - **Fail-closed endpoint resolution.** Guardian connects to an explicit `DOCKER_HOST`, else a rootless socket (`$XDG_RUNTIME_DIR/docker.sock`, then `/run/user/<uid>/docker.sock`). It uses the rootful `/var/run/docker.sock` only with `GUARDIAN_ALLOW_ROOTFUL=true`, and logs a warning when it does. Otherwise tools return `docker_socket_unresolved` without connecting, so a missing environment variable can never silently route an agent to the root daemon.
+
+- **Bounded log scans.** The agent can choose the anomaly pattern and any container can choose its log text, so a backtracking-heavy pair could stall the event loop that serves every tool. Scans use the `regex` module's match timeout with one total budget per scan (`GUARDIAN_REGEX_TIMEOUT`, default 1 s); when it runs out, the tool returns `regex_timeout`. The budget also applies to the operator's `GUARDIAN_ANOMALY_REGEX`.
 
 - **Bounded daemon calls.** Every client is created with `GUARDIAN_DOCKER_TIMEOUT` (default 5 s) and verified with `ping()`. Unreachable or slow daemons yield `daemon_unavailable` instead of a hung session.
 
@@ -72,6 +74,7 @@ No tool creates, executes in, stops, removes, or prunes containers, images, volu
 | `GUARDIAN_RESTART_DENY_REGEX` | `^(prod\|db\|kube\|vault)-.*` | Names that can never be restarted |
 | `GUARDIAN_RESTART_ALLOW_REGEX` | unset | When set, only matching names can be restarted |
 | `GUARDIAN_ANOMALY_REGEX` | error/exception/fatal/… | Default log anomaly pattern |
+| `GUARDIAN_REGEX_TIMEOUT` | `1` | Total seconds one log scan may spend matching |
 | `GUARDIAN_DOCKER_TIMEOUT` | `5` | Seconds per Docker API call |
 | `GUARDIAN_LOG_LEVEL` | `INFO` | stderr log level |
 | `DOCKER_HOST` | unset | Explicit Docker endpoint; always wins |
@@ -83,12 +86,12 @@ The provided `Dockerfile` runs as a non-root user (UID/GID 10001) with the socke
 
 ## 4. Verification & Testing
 
-47 pytest tests, with docker-py fully mocked, covering:
+68 pytest tests, with docker-py fully mocked, covering:
 
 - read-only inspection and env-value withholding;
 - the restart guard: write gate, deny/allow precedence, and the container-ID bypass case;
 - daemon failures: unreachable, ping timeout, timeout mid-request, not found, restart with daemon down;
-- log retrieval limits and the anomaly scanner;
+- log retrieval limits, the anomaly scanner, and its time budget;
 - tool registration.
 
 CI runs the suite on Python 3.10, 3.12, and 3.13.
