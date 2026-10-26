@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = ["S101"]  # pytest uses bare asserts
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S108"]  # fake socket paths under /tmp, never created
+"benchmarks/*" = ["S603", "S607"]  # launches the server under test
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["server"]
