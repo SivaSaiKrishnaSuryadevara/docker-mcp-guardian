@@ -108,4 +108,4 @@ The security model, tool surface, and policy engine are documented in [docs/SECU
 
 ## Deep Dive & Publications
 
-A hands-on implementation and security analysis guide is currently under editorial review for HackerNoon. The direct publication link will be posted here upon release.
+- **[Don't Hand Claude Your Docker Socket — Build It a Guarded One](https://hackernoon.com/dont-hand-claude-your-docker-socket-build-it-a-guarded-one)** (HackerNoon, October 21, 2026): why handing an AI agent the raw Docker socket is root-equivalent, and how this server's read-only default, canonical-name restart deny-list, secret redaction and bounded Docker API timeouts contain it.
