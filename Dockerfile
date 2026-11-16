@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- builder: resolve and install dependencies into an isolated venv --------
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
@@ -13,7 +13,7 @@ RUN grep -v '^pytest' requirements.txt > runtime-requirements.txt \
  && pip install -r runtime-requirements.txt
 
 # ---- runtime: minimal image, non-root user ----------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # UID/GID of the runtime user, and the GID that owns /var/run/docker.sock on
 # the host (`stat -c %g /var/run/docker.sock` on Linux). The socket is only
