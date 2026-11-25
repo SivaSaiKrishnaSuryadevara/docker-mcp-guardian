@@ -102,6 +102,29 @@ DOCKER_HOST=unix:///run/user/1000/docker.sock docker info --format '{{.SecurityO
 
 On the first tool call, Guardian logs the endpoint it chose to stderr, for example `Using Docker endpoint unix:///run/user/1000/docker.sock (DOCKER_HOST is set).`
 
+## Verifying Release Images
+
+Release images are published to `ghcr.io/sivasaikrishnasuryadevara/docker-mcp-guardian` for `linux/amd64` and `linux/arm64` by [`release-signed.yml`](.github/workflows/release-signed.yml) when a `v*.*.*` tag is pushed. Each image is:
+
+- **signed** with keyless [Sigstore cosign](https://docs.sigstore.dev/): the signing certificate is bound to this repository's release workflow through GitHub OIDC, and the signature is recorded in the public Rekor transparency log. No signing key exists to leak.
+- **attested** with a [GitHub build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) (SLSA provenance) for the same image digest.
+
+Verify both before running an image (requires cosign 3.x and the GitHub CLI):
+
+```bash
+IMAGE=ghcr.io/sivasaikrishnasuryadevara/docker-mcp-guardian:<version>   # e.g. 1.0.0
+
+# 1. Sigstore signature: issued to this repository's release workflow, for a version tag.
+cosign verify "$IMAGE" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/SivaSaiKrishnaSuryadevara/docker-mcp-guardian/\.github/workflows/release-signed\.yml@refs/tags/v'
+
+# 2. Build provenance: built by this repository's GitHub Actions workflow.
+gh attestation verify "oci://$IMAGE" --repo SivaSaiKrishnaSuryadevara/docker-mcp-guardian
+```
+
+Both commands exit non-zero if the image was not built and signed by this repository's release workflow. To run exactly what you verified, pull by digest: `docker pull ghcr.io/sivasaikrishnasuryadevara/docker-mcp-guardian@sha256:<digest>`, using the digest that `cosign verify` prints.
+
 ## Write-up
 
 The security model, tool surface, and policy engine are documented in [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
